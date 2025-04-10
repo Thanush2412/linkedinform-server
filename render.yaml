@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: linkedinform-server
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: HOST
+        value: 0.0.0.0
+      - key: MONGODB_URI
+        sync: false
+        # MongoDB Atlas connection string - set this in Render dashboard
+      - key: ALLOWED_ORIGINS
+        value: https://linked-in-form-89014.web.app
+        # Firebase frontend URL
+      - key: JWT_SECRET
+        sync: false
+        # Secure JWT secret for production - set this in Render dashboard
+      - key: API_PREFIX
+        value: /api
+      - key: DEFAULT_ADMIN_EMAIL
+        value: admin@example.com
+      - key: DEFAULT_ADMIN_PASSWORD
+        value: Admin@123
+      - key: SUPERADMIN_EMAIL
+        value: superadmin@example.com
+      - key: SUPERADMIN_PASSWORD
+        value: SuperAdmin@123
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+        # Set this in Render dashboard
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+        # Set this in Render dashboard
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+        # Set this in Render dashboard
