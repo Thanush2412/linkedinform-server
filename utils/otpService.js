@@ -105,80 +105,66 @@ const verifyOTP = async (mobileNumber, otp, requestId) => {
     // Format mobile number with country code if needed
     const formattedMobile = mobileNumber.startsWith('+') ? mobileNumber : `+91${mobileNumber}`;
     
-    // For development or when using a local request ID, verify against our database first
-    if (process.env.NODE_ENV === 'development' || requestId.startsWith('local-')) {
-      console.log('Using local OTP verification');
-      const isValid = await exports.verifyLocalOTP(mobileNumber, otp);
+    console.log(`Verifying OTP - Mobile: ${formattedMobile}, OTP: ${otp}, RequestID: ${requestId}`);
+    
+    // First, verify against local database
+    const isLocalVerified = await exports.verifyLocalOTP(formattedMobile, otp);
+    
+    if (isLocalVerified) {
+      console.log('Local OTP verification successful');
+      return {
+        success: true,
+        message: 'OTP verified successfully'
+      };
+    }
+    
+    // If local verification fails, try MSG91 verification
+    try {
+      const response = await axios.post('https://control.msg91.com/api/v5/otp/verify', {
+        mobile: formattedMobile,
+        otp: otp
+      }, {
+        headers: {
+          'accept': 'application/json',
+          'content-type': 'application/json',
+          'authkey': MSG91_AUTH_KEY
+        }
+      });
       
-      if (isValid) {
+      console.log('MSG91 Verification Response:', response.data);
+      
+      // Check if verification was successful
+      const isSuccess = response.data && (response.data.type === 'success');
+      
+      if (isSuccess) {
         return {
           success: true,
-          message: 'OTP verified successfully (local verification)'
+          message: 'OTP verified successfully'
         };
-      }
-      
-      // If local verification fails in production, try MSG91 API
-      if (process.env.NODE_ENV !== 'development') {
-        // Continue to MSG91 verification
-        console.log('Local verification failed, trying MSG91 API');
       } else {
-        // In development, just return the failure
+        console.log('MSG91 OTP verification failed');
         return {
           success: false,
           message: 'Invalid or expired OTP'
         };
       }
-    }
-    
-    // Only attempt MSG91 verification if not in development mode or local failed
-    if (process.env.NODE_ENV !== 'development') {
-      // Validate MSG91 auth key before making API call
-      if (!MSG91_AUTH_KEY || MSG91_AUTH_KEY === "YOUR_MSG91_AUTH_KEY") {
-        console.error('MSG91 Auth Key not configured');
+    } catch (apiError) {
+      console.error('MSG91 Verification API Error:', apiError.response?.data || apiError.message);
+      
+      // In development mode, provide more detailed error
+      if (process.env.NODE_ENV === 'development') {
         return {
           success: false,
-          message: 'OTP service configuration error',
-          error: 'MSG91 Auth Key not configured'
+          message: 'Invalid or expired OTP',
+          details: apiError.response?.data || apiError.message
         };
       }
-
-      try {
-        console.log('Attempting MSG91 API verification');
-        // Verify OTP via MSG91 API
-        const response = await axios.post('https://control.msg91.com/api/v5/otp/verify', {
-          otp: otp,
-          mobile: formattedMobile
-        }, {
-          headers: {
-            'accept': 'application/json',
-            'content-type': 'application/json',
-            'authkey': MSG91_AUTH_KEY
-          }
-        });
-        
-        // Check if verification was successful
-        const isSuccess = response.data && (response.data.type === 'success' || response.data.message === 'OTP verified success');
-        
-        return {
-          success: isSuccess,
-          message: isSuccess ? 'OTP verified successfully' : 'Invalid or expired OTP',
-          data: response.data
-        };
-      } catch (apiError) {
-        console.error('MSG91 Verify API Error:', apiError.message);
-        return {
-          success: false,
-          message: 'Failed to verify OTP with service provider. Please try again.',
-          error: apiError.message
-        };
-      }
+      
+      return {
+        success: false,
+        message: 'Invalid or expired OTP'
+      };
     }
-    
-    // This should only happen if we're in development and local verification failed
-    return {
-      success: false,
-      message: 'Invalid or expired OTP'
-    };
   } catch (error) {
     console.error('OTP Verification Error:', error);
     return {
