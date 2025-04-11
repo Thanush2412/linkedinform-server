@@ -38,21 +38,6 @@ const registrationSchema = new mongoose.Schema({
     ref: 'Form',
     required: true
   },
-  coupon: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Coupon'
-  },
-  couponCode: {
-    type: String,
-    trim: true
-  },
-  couponUsed: {
-    type: Boolean,
-    default: false
-  },
-  couponUsedAt: {
-    type: Date
-  },
   location: {
     type: {
       latitude: Number,

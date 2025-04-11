@@ -39,8 +39,8 @@ const sendOTP = async (mobileNumber) => {
       return {
         success: true,
         message: 'OTP sent successfully',
-        requestId: `local-${Date.now()}`,
-        otp: process.env.NODE_ENV === 'development' ? generatedOTP : undefined
+        requestId: `${Date.now()}`,
+        otp: generatedOTP
       };
     } catch (bhashError) {
       console.error('BhashSMS Error:', bhashError.message);
@@ -72,88 +72,39 @@ const verifyOTP = async (mobileNumber, otp, requestId) => {
   try {
     console.log(`Verifying OTP - Mobile: ${mobileNumber}, OTP: ${otp}, RequestID: ${requestId}`);
     
-    // For development or when using a local request ID, verify against our database first
-    if (process.env.NODE_ENV === 'development' || requestId.startsWith('local-')) {
-      console.log('Using local OTP verification');
-      const isValid = await exports.verifyLocalOTP(mobileNumber, otp);
-      
-      if (isValid) {
+    // Verify against our database first
+    const isValid = await exports.verifyLocalOTP(mobileNumber, otp);
+    if (isValid) {
+      return {
+        success: true,
+        message: 'OTP verified successfully'
+      };
+    }
+
+    // Attempt MSG91 verification
+    try {
+      const response = await msg91.verifyOTP(otp, mobileNumber);
+      if (response.success) {
         return {
           success: true,
-          message: 'OTP verified successfully (local verification)'
+          message: 'OTP verified successfully'
         };
       }
-      
-      // If local verification fails in production, try MSG91 API
-      if (process.env.NODE_ENV !== 'development') {
-        // Continue to MSG91 verification
-        console.log('Local verification failed, trying MSG91 API');
-      } else {
-        // In development, just return the failure
-        return {
-          success: false,
-          message: 'Invalid or expired OTP'
-        };
-      }
+      throw new Error('Invalid OTP');
+    } catch (error) {
+      console.error('OTP verification error:', error);
+      return {
+        success: false,
+        message: 'Invalid OTP'
+      };
     }
-    
-    // Only attempt MSG91 verification if not in development mode or local failed
-    if (process.env.NODE_ENV !== 'development') {
-      try {
-        console.log('Attempting MSG91 API verification');
-        // Verify OTP via MSG91 API
-        const response = await axios.post('https://control.msg91.com/api/v5/otp/verify', {
-          otp: otp,
-          mobile: formattedMobile
-        }, {
-          headers: {
-            'accept': 'application/json',
-            'content-type': 'application/json',
-            'authkey': MSG91_AUTH_KEY
-          }
-        });
-        
-        // Check if verification was successful
-        const isSuccess = response.data && (response.data.type === 'success' || response.data.message === 'OTP verified success');
-        
-        // Handle specific authkey error
-        if (response.data && response.data.code === '201') {
-          console.error('MSG91 Authkey Error:', response.data.message);
-          return {
-            success: false,
-            message: 'OTP verification service is temporarily unavailable. Please try again later.',
-            data: response.data
-          };
-        }
-        
-        return {
-          success: isSuccess,
-          message: isSuccess ? 'OTP verified successfully' : 'Invalid or expired OTP',
-          data: response.data
-        };
-      } catch (apiError) {
-        console.error('MSG91 Verify API Error:', apiError.message);
-        return {
-          success: false,
-          message: 'Failed to verify OTP with service provider. Please try again.',
-          error: apiError.message
-        };
-      }
-    }
-    
-    // This should only happen if we're in development and local verification failed
-    return {
-      success: false,
-      message: 'Invalid or expired OTP',
-      errorCode: 'VERIFICATION_FAILED'
-    };
   } catch (error) {
     console.error('OTP Verification Error:', error);
     return {
       success: false,
       message: 'Failed to verify OTP. Please try again.',
       errorCode: 'SYSTEM_ERROR',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: error.message
     };
   }
 };

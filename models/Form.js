@@ -72,14 +72,6 @@ const formSchema = new mongoose.Schema({
     required: true,
     default: 1 // Default radius in KM
   },
-  coupon_limit: {
-    type: Number,
-    default: 0 // 0 means unlimited
-  },
-  coupon_codes: {
-    type: [String],
-    default: []
-  },
   requireLocation: {
     type: Boolean,
     default: true

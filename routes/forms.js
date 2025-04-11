@@ -11,7 +11,7 @@ const storage = multer.diskStorage({
     cb(null, path.join(__dirname, '../uploads'));
   },
   filename: (req, file, cb) => {
-    cb(null, `coupon-${Date.now()}${path.extname(file.originalname)}`);
+    cb(null, `form-upload-${Date.now()}${path.extname(file.originalname)}`);
   }
 });
 
@@ -75,7 +75,7 @@ router.post(
   '/create',
   authMiddleware.authenticate,
   authMiddleware.isAdmin,
-  upload.single('couponFile'),
+  upload.single('file'),
   formController.createForm
 );
 

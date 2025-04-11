@@ -1,5 +1,4 @@
 const Form = require('../models/Form');
-const Coupon = require('../models/Coupon');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const Registration = require('../models/Registration');
@@ -139,9 +138,8 @@ exports.createForm = async (req, res) => {
     
     // Create default coupons if none provided
     if (coupons.length === 0) {
-      // Generate some default coupons
-      coupons = Array.from({length: 10}, (_, i) => `DEFAULT_${i+1}`);
-      console.log('Created default coupons:', coupons);
+      // Don't create default coupons anymore
+      console.log('No coupons provided, form will be created without coupons');
     }
 
     // Create slug
@@ -172,17 +170,24 @@ exports.createForm = async (req, res) => {
       const savedForm = await form.save();
       console.log('Form saved successfully with ID:', savedForm._id);
 
-      // Create coupons
-      const couponDocs = coupons.map(code => ({
-        coupon_code: code,
-        form: savedForm._id,
-        is_assigned: false
-      }));
+      // Create coupons if any were uploaded
+      if (coupons.length > 0) {
+        const couponDocs = coupons.map(code => ({
+          code: code.trim().toUpperCase(), // Ensure consistent formatting
+          discount: 0, // Default discount value
+          isPercentage: true,
+          maxUses: 1,
+          isActive: true,
+          formId: savedForm._id,
+          expiresAt: savedForm.deactivation // Set expiration to match form deactivation
+        }));
 
-      console.log(`Inserting ${couponDocs.length} coupons`);
-      const savedCoupons = await Coupon.insertMany(couponDocs);
-      console.log(`${savedCoupons.length} coupons saved successfully`);
-
+        console.log(`Inserting ${couponDocs.length} coupons`);
+        const Coupon = mongoose.model('Coupon');
+        const savedCoupons = await Coupon.insertMany(couponDocs);
+        console.log(`${savedCoupons.length} coupons saved successfully`);
+      }
+      
       // Return success response
       res.status(201).json({
         success: true,
@@ -416,16 +421,15 @@ exports.deleteForm = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Unauthorized to delete this form' });
     }
     
-    // Delete associated coupons
-    await Coupon.deleteMany({ form: formId });
-    
+    // Delete associated registrations
+    await Registration.deleteMany({ form: formId });
+
     // Delete the form
     await Form.findByIdAndDelete(formId);
-    
-    // Return success response
-    res.json({
+
+    res.status(200).json({
       success: true,
-      message: 'Form and associated coupons deleted successfully'
+      message: 'Form deleted successfully'
     });
   } catch (error) {
     console.error('Delete form error:', error);
@@ -483,107 +487,59 @@ exports.uploadExcelData = async (req, res) => {
       const workbook = xlsx.readFile(req.file.path);
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
       
-      // Get all values from column A
-      const columnAValues = [];
-      let row = 1;
-      while (worksheet[`A${row}`]) {
-        columnAValues.push(worksheet[`A${row}`].v);
-        row++;
-      }
-
-      if (columnAValues.length === 0) {
-        // Clean up the uploaded file
-        if (fs.existsSync(req.file.path)) {
-          fs.unlinkSync(req.file.path);
-        }
-        
+      // Validate column headers
+      const columnHeaders = Object.keys(xlsx.utils.sheet_to_json(worksheet, { header: 1 })[0]);
+      const requiredHeaders = ['name', 'email', 'mobile', 'college', 'register_number', 'yop'];
+      const missingHeaders = requiredHeaders.filter(header => !columnHeaders.includes(header));
+      
+      if (missingHeaders.length > 0) {
         return res.status(400).json({
           success: false,
-          message: 'Column A is empty'
+          message: `Missing required headers: ${missingHeaders.join(', ')}`
         });
       }
 
-      // Get form's coupon limit
-      const couponLimit = form.coupon_limit || 0; // 0 means unlimited
-      
-      // Get existing unassigned coupons for this form
-      const existingCoupons = await Coupon.find({ 
-        form: form._id,
-        is_assigned: false 
-      });
-      
-      // Calculate how many new coupons we can add
-      const maxNewCoupons = couponLimit > 0 
-        ? Math.max(0, couponLimit - existingCoupons.length)
-        : columnAValues.length;
-      
-      if (maxNewCoupons === 0) {
-        // Clean up the uploaded file
-        if (fs.existsSync(req.file.path)) {
-          fs.unlinkSync(req.file.path);
-        }
-        
-        return res.status(400).json({
-          success: false,
-          message: 'Coupon limit reached or no new coupons needed'
-        });
-      }
-      
-      // Create new coupons based on available slots
-      const newCouponCodes = [];
-      const maxCoupons = Math.min(maxNewCoupons, columnAValues.length);
-      
-      for (let i = 0; i < maxCoupons; i++) {
-        const couponCode = columnAValues[i];
-        const couponDoc = {
-          coupon_code: couponCode,
-          form: form._id,
-          is_assigned: false
-        };
-        
-        await Coupon.create(couponDoc);
-        newCouponCodes.push(couponCode);
-      }
-      
-      // Update the form with all coupon codes (existing + new)
-      const allCouponCodes = [
-        ...existingCoupons.map(c => c.coupon_code),
-        ...newCouponCodes
+      // Extract column A values (if needed for other purposes)
+      const columnData = xlsx.utils.sheet_to_json(worksheet);
+      const columnAValues = columnData.map(row => row[columnHeaders[0]]);
+
+      // Update the form with data
+      form.fields = [
+        // Existing default fields will be preserved
+        ...form.fields.filter(field => 
+          ['name', 'email', 'mobile', 'college', 'register_number', 'yop']
+            .includes(field.fieldId)
+        )
       ];
-      
-      form.coupon_codes = allCouponCodes;
+
       const savedForm = await form.save();
-      
+
       // Clean up the uploaded file
       if (fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
       }
-      
+
       // Return updated form data
       return res.status(200).json({
         success: true,
-        message: `Form updated successfully with ${newCouponCodes.length} new coupon codes`,
+        message: 'Form updated successfully',
         data: {
           formId: savedForm._id,
-          slug: savedForm.slug,
-          newCouponCodes: newCouponCodes,
-          totalCoupons: allCouponCodes.length,
-          existingCoupons: existingCoupons.length,
-          newCoupons: newCouponCodes.length
+          slug: savedForm.slug
         }
       });
       
     } catch (error) {
-      console.error('Error processing Excel file:', error);
+      console.error('Form Excel upload error:', error);
       
-      // Clean up the uploaded file
-      if (fs.existsSync(req.file.path)) {
+      // Clean up the uploaded file if it exists
+      if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
       }
       
       return res.status(500).json({
         success: false,
-        message: 'Error processing Excel file',
+        message: 'Failed to upload Excel data',
         error: error.message
       });
     }

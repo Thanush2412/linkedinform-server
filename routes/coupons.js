@@ -1,78 +1,28 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
-const path = require('path');
-const authMiddleware = require('../middlewares/auth');
 const couponController = require('../controllers/couponController');
-const Coupon = require('../models/Coupon');
+const { authenticate, isAdmin } = require('../middlewares/auth');
+const multer = require('multer');
 
-// Configure multer for file uploads with better error handling
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    // Generate unique filename with timestamp
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, 'coupons-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-// File filter - only accept Excel files
-const fileFilter = (req, file, cb) => {
-  if (
-    file.mimetype === 'application/vnd.ms-excel' || 
-    file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-  ) {
-    cb(null, true);
-  } else {
-    cb(new Error('Only Excel files are allowed'), false);
-  }
-};
-
+// Configure multer for memory storage
+const storage = multer.memoryStorage();
 const upload = multer({ 
-  storage: storage,
-  fileFilter: fileFilter,
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB
-  }
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
-// Handle multer errors
-const handleMulterErrors = (err, req, res, next) => {
-  if (err instanceof multer.MulterError) {
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({
-        success: false,
-        message: 'File size exceeds 5MB limit'
-      });
-    }
-    return res.status(400).json({
-      success: false,
-      message: `Upload error: ${err.message}`
-    });
-  } else if (err) {
-    return res.status(400).json({
-      success: false,
-      message: err.message
-    });
-  }
-  next();
-};
+// Admin routes (require admin privileges)
+router.post('/upload', authenticate, isAdmin, upload.single('file'), couponController.uploadCoupons);
+router.get('/', authenticate, isAdmin, couponController.getCoupons);
+router.delete('/:id', authenticate, isAdmin, couponController.deleteCoupon);
+router.patch('/:id/status', authenticate, isAdmin, couponController.updateCouponStatus);
+router.get('/:id/stats', authenticate, isAdmin, couponController.getCouponStats);
+router.get('/:id/export', authenticate, isAdmin, couponController.getCouponExportData);
+router.get('/export', authenticate, isAdmin, couponController.exportAllCoupons);
 
-// All coupon routes are protected
-router.use(authMiddleware.authenticate);
+// Public routes (for registration process)
+router.post('/validate', authenticate, couponController.validateCoupon);
+router.post('/apply', authenticate, couponController.applyCoupon);
+router.post('/track-copy', couponController.trackCouponCopy); // No auth required to track copy events
 
-// Admin-only routes
-router.use('/upload', authMiddleware.isAdmin);
-
-// Upload coupons from Excel file
-router.post('/upload', upload.single('file'), handleMulterErrors, couponController.uploadCoupons);
-
-// Assign coupon to a registration (accessible to authenticated users)
-router.post('/assign', couponController.assignCoupon);
-
-// Get available coupons count for a form
-router.get('/available/:formId', couponController.getAvailableCouponsCount);
-
-module.exports = router; 
+module.exports = router;

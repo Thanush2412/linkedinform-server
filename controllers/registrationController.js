@@ -1,175 +1,135 @@
 const Registration = require('../models/Registration');
 const Form = require('../models/Form');
-const Coupon = require('../models/Coupon');
-const RegistrationCouponMapping = require('../models/RegistrationCouponMapping');
 const mongoose = require('mongoose');
+
 
 // Submit registration
 exports.submitRegistration = async (req, res) => {
   try {
-    const { name, email, mobile, college, register_number, yop, slug, dynamicFields } = req.body;
-
-    // Validate required fields
-    if (!name || !email || !mobile || !college || !register_number || !yop || !slug) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'All required fields must be provided' 
-      });
-    }
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a valid email address'
-      });
-    }
-
-    // Validate mobile number format (10 digits)
-    const mobileRegex = /^[0-9]{10}$/;
-    if (!mobileRegex.test(mobile)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a valid 10-digit mobile number'
-      });
-    }
+    const { 
+      email, 
+      mobile, 
+      formSlug, 
+      couponCode, 
+      ...otherDetails 
+    } = req.body;
 
     // Find the form
-    const form = await Form.findOne({ slug });
+    const form = await Form.findOne({ slug: formSlug });
     if (!form) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Form not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Form not found'
       });
     }
 
     // Check if form is active
-    if (!form.isActive) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'This form is not currently active' 
+    const now = new Date();
+    if (now < form.activation || now > form.deactivation) {
+      return res.status(400).json({
+        success: false,
+        message: 'Form is not currently active'
       });
     }
 
-    // Check if email is already registered for ANY form
-    const existingEmailRegistration = await Registration.findOne({ email });
-
-    if (existingEmailRegistration) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'This email is already registered for another form' 
-      });
-    }
-
-    // Check if mobile is already registered for ANY form
-    const existingMobileRegistration = await Registration.findOne({ mobile });
-
-    if (existingMobileRegistration) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'This mobile number is already registered for another form' 
-      });
-    }
-
-    // Check if registration limit has been reached (if limit is set)
-    if (form.coupon_limit > 0) {
-      // Count existing registrations for this form
-      const registrationsCount = await Registration.countDocuments({ form: form._id });
-      
-      // Check if limit has been reached
-      if (registrationsCount >= form.coupon_limit) {
+    // Validate coupon if required
+    let coupon = null;
+    if (form.couponRequired) {
+      if (!couponCode) {
         return res.status(400).json({
           success: false,
-          message: 'Registration limit for this form has been reached'
+          message: 'Coupon code is required for this form'
+        });
+      }
+
+      // Find and validate coupon
+      coupon = await Coupon.findOne({ 
+        code: couponCode, 
+        form: form._id,
+        isUsed: false 
+      });
+
+      if (!coupon) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or already used coupon'
         });
       }
     }
 
-    // Check if there's an available coupon for this form
-    let couponCode = null;
-    let couponDoc = null;
-    
-    // Try to find the next available coupon code from the Coupon collection
-    couponDoc = await Coupon.findOne({
-      form: form._id,
-      is_assigned: false  // Find a coupon that hasn't been assigned yet
-    }).sort({ _id: 1 });  // Get the oldest one first (sequential order)
-
-    if (couponDoc) {
-      // Use the coupon code from the found coupon
-      couponCode = couponDoc.coupon_code;
-      
-      // Mark the coupon as assigned
-      couponDoc.is_assigned = true;
-      couponDoc.assigned_to = email;
-      couponDoc.assigned_at = new Date();
-      await couponDoc.save();
-    } else {
-      // No available coupon in the database, generate a fallback one
-      // This should be rare if you've loaded coupons properly
-      couponCode = generateUniqueCouponCode();
-      console.warn(`Warning: No available coupon found for form ${slug}. Using generated code instead.`);
-    }
-
-    // Create registration with coupon code
-    const registration = new Registration({
-      name,
-      email,
-      mobile,
-      college,
-      register_number,
-      yop,
-      form: form._id,
-      couponCode,
-      dynamicFields: dynamicFields || {}
+    // Check for existing registration
+    const existingRegistration = await Registration.findOne({
+      $or: [
+        { email, form: form._id },
+        { mobile, form: form._id }
+      ]
     });
 
-    // Save the registration
-    await registration.save();
-
-    // Create registration-coupon mapping if a coupon was assigned
-    if (couponDoc) {
-      const registrationCouponMapping = new RegistrationCouponMapping({
-        registration: registration._id,
-        coupon: couponDoc._id,
-        form: form._id
-      });
-      await registrationCouponMapping.save();
-    }
-
-    // Return successful response with registration and coupon details
-    return res.status(201).json({
-      success: true,
-      message: 'Registration successful',
-      data: {
+    if (existingRegistration) {
+      return res.status(400).json({
+        success: true,
+        exists: true,
+        message: 'Email or mobile already registered for this form',
         registration: {
-          name: registration.name,
-          email: registration.email,
-          mobile: registration.mobile,
-          college: registration.college,
-          register_number: registration.register_number,
-          yop: registration.yop
+          id: existingRegistration._id,
+          couponCode: existingRegistration.couponCode || null
         },
-        couponCode: couponCode
-      }
-    });
-  } catch (error) {
-    console.error('Registration submission error:', error);
-    
-    // Handle duplicate key errors (unique constraint violations)
-    if (error.code === 11000) {
-      const field = Object.keys(error.keyPattern)[0];
+        formStats: {
+          registrationsCount: await Registration.countDocuments({ form: form._id })
+        }
+      });
+    }
+
+    // Check registration limit
+    const registrationsCount = await Registration.countDocuments({ form: form._id });
+    if (form.couponLimit > 0 && registrationsCount >= form.couponLimit) {
       return res.status(400).json({
         success: false,
-        message: `This ${field} is already registered for this form`
+        message: 'Registration limit for this form has been reached'
       });
     }
-    
-    return res.status(500).json({
+
+    // Create registration
+    const registrationData = {
+      email,
+      mobile,
+      form: form._id,
+      ...otherDetails
+    };
+
+    // Create new registration
+    const registration = new Registration({
+      name: otherDetails.name,
+      email,
+      mobile,
+      college: otherDetails.college,
+      register_number: otherDetails.register_number,
+      yop: otherDetails.yop,
+      form: form._id,
+      location: {
+        latitude: otherDetails.latitude,
+        longitude: otherDetails.longitude
+      }
+    });
+
+    // Save registration
+    await registration.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Registration successful',
+      registrationId: registration._id,
+      formStats: {
+        registrationsCount: await Registration.countDocuments({ form: form._id })
+      }
+    });
+
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({
       success: false,
-      message: 'An error occurred while submitting your registration',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Failed to submit registration',
+      error: error.message
     });
   }
 };
@@ -216,30 +176,10 @@ exports.trackCouponUsage = async (req, res) => {
       });
     }
     
-    // Update the mapping to mark the coupon as used
-    const mapping = await RegistrationCouponMapping.findOneAndUpdate(
-      {
-        registration: registration._id,
-        couponCode: couponCode
-      },
-      {
-        isUsed: true,
-        usedAt: new Date()
-      },
-      { new: true }
-    );
-    
-    // Also update the registration record
+    // Update the registration record
     registration.couponUsed = true;
     registration.couponUsedAt = new Date();
     await registration.save();
-    
-    if (!mapping) {
-      return res.status(404).json({
-        success: false,
-        message: 'Coupon mapping not found'
-      });
-    }
     
     return res.status(200).json({
       success: true,
@@ -280,8 +220,6 @@ exports.checkEmailRegistration = async (req, res) => {
 
     // Get registration count for the form
     const registrationsCount = await Registration.countDocuments({ form: form._id });
-    const limitReached = form.coupon_limit > 0 && registrationsCount >= form.coupon_limit;
-    const remainingSlots = form.coupon_limit > 0 ? Math.max(0, form.coupon_limit - registrationsCount) : null;
 
     // Check if email is already registered for ANY form
     const existingRegistration = await Registration.findOne({ email });
@@ -302,10 +240,7 @@ exports.checkEmailRegistration = async (req, res) => {
           couponCode: existingRegistration.couponCode || null
         },
         formStats: {
-          registrationsCount,
-          couponLimit: form.coupon_limit,
-          limitReached,
-          remainingSlots
+          registrationsCount
         }
       });
     }
@@ -315,10 +250,7 @@ exports.checkEmailRegistration = async (req, res) => {
       exists: false,
       message: 'Email is not registered for this form',
       formStats: {
-        registrationsCount,
-        couponLimit: form.coupon_limit,
-        limitReached,
-        remainingSlots
+        registrationsCount
       }
     });
 
@@ -365,8 +297,6 @@ exports.checkMobileRegistration = async (req, res) => {
 
     // Get registration count for the form
     const registrationsCount = await Registration.countDocuments({ form: form._id });
-    const limitReached = form.coupon_limit > 0 && registrationsCount >= form.coupon_limit;
-    const remainingSlots = form.coupon_limit > 0 ? Math.max(0, form.coupon_limit - registrationsCount) : null;
 
     // Check if mobile is already registered for ANY form
     const existingRegistration = await Registration.findOne({ mobile });
@@ -387,10 +317,7 @@ exports.checkMobileRegistration = async (req, res) => {
           couponCode: existingRegistration.couponCode || null
         },
         formStats: {
-          registrationsCount,
-          couponLimit: form.coupon_limit,
-          limitReached,
-          remainingSlots
+          registrationsCount
         }
       });
     }
@@ -401,10 +328,7 @@ exports.checkMobileRegistration = async (req, res) => {
       exists: false,
       message: 'Mobile number is available for registration',
       formStats: {
-        registrationsCount,
-        couponLimit: form.coupon_limit,
-        limitReached,
-        remainingSlots
+        registrationsCount
       }
     });
   } catch (error) {
@@ -416,3 +340,37 @@ exports.checkMobileRegistration = async (req, res) => {
     });
   }
 }; 
+
+// Get form statistics
+exports.getFormStats = async (req, res) => {
+  try {
+    const { slug } = req.params;
+    
+    // Find the form
+    const form = await Form.findOne({ slug });
+    if (!form) {
+      return res.status(404).json({
+        success: false,
+        message: 'Form not found'
+      });
+    }
+    
+    // Get registration count
+    const registrationsCount = await Registration.countDocuments({ form: form._id });
+    
+    return res.status(200).json({
+      success: true,
+      formStats: {
+        registrationsCount
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error fetching form stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch form stats',
+      error: error.message
+    });
+  }
+};

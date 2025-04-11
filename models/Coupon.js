@@ -1,34 +1,106 @@
 const mongoose = require('mongoose');
 
 const couponSchema = new mongoose.Schema({
-  coupon_code: {
+  code: {
     type: String,
     required: true,
+    unique: true,
     trim: true,
-    maxlength: 200
+    uppercase: true
   },
-  form: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Form',
-    required: true
-  },
-  is_assigned: {
-    type: Boolean,
-    default: false
-  },
-  assigned_to: {
+  description: {
     type: String,
     trim: true
   },
-  assigned_at: {
+  discount: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 0
+  },
+  isPercentage: {
+    type: Boolean,
+    default: true
+  },
+  maxUses: {
+    type: Number,
+    default: 1
+  },
+  usedCount: {
+    type: Number,
+    default: 0
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  expiryDate: {
     type: Date
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  // Track which registrations have used this coupon
+  usedBy: [{
+    registrationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Registration'
+    },
+    usedAt: {
+      type: Date,
+      default: Date.now
+    },
+    discountApplied: {
+      type: Number
+    },
+    // Additional tracking information
+    employeeNumber: {
+      type: String
+    },
+    userDetails: {
+      name: String,
+      email: String,
+      phone: String
+    },
+    formDetails: {
+      formId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Form'
+      },
+      college: String
+    }
+  }],
+  // Track when the coupon code is copied
+  copyEvents: [{
+    timestamp: {
+      type: Date,
+      default: Date.now
+    },
+    ipAddress: String,
+    userAgent: String,
+    formId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Form'
+    }
+  }],
+  // Track which form this coupon is associated with (optional)
+  formId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Form'
+  },
+  // New field to store additional data from Excel/CSV
+  metadata: {
+    type: Object,
+    default: {}
   }
 }, {
   timestamps: true
 });
 
-// Create indexes for efficient querying
-couponSchema.index({ form: 1, is_assigned: 1 });
-couponSchema.index({ assigned_to: 1 });
+// Create index for faster lookups
+couponSchema.index({ code: 1 });
 
-module.exports = mongoose.model('Coupon', couponSchema); 
+const Coupon = mongoose.model('Coupon', couponSchema);
+
+module.exports = Coupon;
