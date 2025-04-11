@@ -128,31 +128,30 @@ exports.submitRegistration = async (req, res) => {
     // Save the registration
     await registration.save();
 
-    // Create a mapping between registration and coupon if a coupon was assigned
+    // Create registration-coupon mapping if a coupon was assigned
     if (couponDoc) {
-      const mapping = new RegistrationCouponMapping({
+      const registrationCouponMapping = new RegistrationCouponMapping({
         registration: registration._id,
         coupon: couponDoc._id,
         form: form._id
       });
-      await mapping.save();
+      await registrationCouponMapping.save();
     }
 
-    // Return success response
+    // Return successful response with registration and coupon details
     return res.status(201).json({
       success: true,
-      message: 'Registration submitted successfully',
+      message: 'Registration successful',
       data: {
         registration: {
-          id: registration._id,
           name: registration.name,
           email: registration.email,
           mobile: registration.mobile,
           college: registration.college,
           register_number: registration.register_number,
-          yop: registration.yop,
-          couponCode: registration.couponCode
-        }
+          yop: registration.yop
+        },
+        couponCode: couponCode
       }
     });
   } catch (error) {
