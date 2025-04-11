@@ -72,16 +72,7 @@ const verifyOTP = async (mobileNumber, otp, requestId) => {
   try {
     console.log(`Verifying OTP - Mobile: ${mobileNumber}, OTP: ${otp}, RequestID: ${requestId}`);
     
-    // Verify against our database first
-    const isValid = await exports.verifyLocalOTP(mobileNumber, otp);
-    if (isValid) {
-      return {
-        success: true,
-        message: 'OTP verified successfully'
-      };
-    }
-
-    // Attempt MSG91 verification
+    // Verify OTP using MSG91 API
     try {
       const response = await msg91.verifyOTP(otp, mobileNumber);
       if (response.success) {

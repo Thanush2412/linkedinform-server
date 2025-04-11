@@ -129,7 +129,7 @@ exports.submitRegistration = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to submit registration',
-      error: error.message
+      error: 'An error occurred while processing your request'
     });
   }
 };
@@ -191,7 +191,7 @@ exports.trackCouponUsage = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to track coupon usage',
-      error: error.message
+      error: 'An error occurred while processing your request'
     });
   }
 };
@@ -259,7 +259,7 @@ exports.checkEmailRegistration = async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: 'Failed to check email registration',
-      error: error.message 
+      error: 'An error occurred while processing your request' 
     });
   }
 };
@@ -336,7 +336,7 @@ exports.checkMobileRegistration = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'An error occurred while checking mobile registration',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: 'An error occurred while processing your request'
     });
   }
 }; 
@@ -370,7 +370,7 @@ exports.getFormStats = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch form stats',
-      error: error.message
+      error: 'An error occurred while processing your request'
     });
   }
 };
