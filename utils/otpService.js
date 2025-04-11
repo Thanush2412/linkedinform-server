@@ -132,6 +132,16 @@ const verifyOTP = async (mobileNumber, otp, requestId) => {
     
     // Only attempt MSG91 verification if not in development mode or local failed
     if (process.env.NODE_ENV !== 'development') {
+      // Validate MSG91 auth key before making API call
+      if (!MSG91_AUTH_KEY || MSG91_AUTH_KEY === "YOUR_MSG91_AUTH_KEY") {
+        console.error('MSG91 Auth Key not configured');
+        return {
+          success: false,
+          message: 'OTP service configuration error',
+          error: 'MSG91 Auth Key not configured'
+        };
+      }
+
       try {
         console.log('Attempting MSG91 API verification');
         // Verify OTP via MSG91 API
@@ -148,16 +158,6 @@ const verifyOTP = async (mobileNumber, otp, requestId) => {
         
         // Check if verification was successful
         const isSuccess = response.data && (response.data.type === 'success' || response.data.message === 'OTP verified success');
-        
-        // Handle specific authkey error
-        if (response.data && response.data.code === '201') {
-          console.error('MSG91 Authkey Error:', response.data.message);
-          return {
-            success: false,
-            message: 'OTP verification service is temporarily unavailable. Please try again later.',
-            data: response.data
-          };
-        }
         
         return {
           success: isSuccess,
