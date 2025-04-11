@@ -1,4 +1,4 @@
-const { sendOTP, verifyLocalOTP, resendOTP } = require('../utils/otpService');
+const { sendOTP, verifyOTP, resendOTP } = require('../utils/otpService');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
 const otpService = require('../utils/otpService');
@@ -79,10 +79,10 @@ exports.verifyOTP = async (req, res) => {
     // Normalize mobile number
     const normalizedMobile = mobile.replace(/^\+91/, '');
 
-    // Verify OTP using database
-    const verificationResult = await otpService.verifyLocalOTP(normalizedMobile, otp);
+    // Verify OTP using service
+    const verificationResult = await verifyOTP(normalizedMobile, otp);
     
-    if (verificationResult) {
+    if (verificationResult.success) {
       return res.status(200).json({
         success: true,
         message: 'OTP verified successfully'

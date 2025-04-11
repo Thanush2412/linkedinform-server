@@ -185,8 +185,12 @@ exports.verifyLocalOTP = async (mobile, providedOtp) => {
   }
 };
 
+// Export all functions
 module.exports = {
   sendOTP,
   verifyOTP,
-  resendOTP
+  resendOTP,
+  generateOTP,
+  storeOTP,
+  verifyLocalOTP
 };
