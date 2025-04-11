@@ -17,10 +17,10 @@ const BHASHSMS_SENDER_ID = process.env.BHASHSMS_SENDER_ID || "BHAINF";
 const sendOTP = async (mobileNumber) => {
   try {
     // Generate a random 6-digit OTP
-    const generatedOTP = exports.generateOTP();
+    const generatedOTP = generateOTP();
     
     // Store OTP in database
-    const stored = await exports.storeOTP(mobileNumber, generatedOTP);
+    const stored = await storeOTP(mobileNumber, generatedOTP);
     if (!stored) {
       return {
         success: false,
@@ -112,12 +112,12 @@ const resendOTP = async (mobileNumber, requestId) => {
 };
 
 // Generate a random 6-digit OTP
-exports.generateOTP = () => {
+const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
 // Store OTP in the database
-exports.storeOTP = async (mobile, otp) => {
+const storeOTP = async (mobile, otp) => {
   try {
     // Normalize mobile number by removing country code if present
     const normalizedMobile = mobile.replace(/^\+91/, '');
@@ -151,7 +151,7 @@ exports.storeOTP = async (mobile, otp) => {
 };
 
 // Verify OTP against database
-exports.verifyLocalOTP = async (mobile, providedOtp) => {
+const verifyLocalOTP = async (mobile, providedOtp) => {
   try {
     // Normalize mobile number by removing country code if present
     const normalizedMobile = mobile.replace(/^\+91/, '');

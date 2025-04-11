@@ -1,7 +1,6 @@
 const { sendOTP, verifyOTP, resendOTP } = require('../utils/otpService');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
-const otpService = require('../utils/otpService');
 
 // Configure CORS for OTP routes
 const corsOptions = {
@@ -21,21 +20,17 @@ exports.sendOTP = async (req, res) => {
     const { mobile } = req.body;
 
     // Validate mobile number
-    if (!mobile || !/^(\+91)?[6-9]\d{9}$/.test(mobile)) {
+    if (!mobile || !/^\d{10}$/.test(mobile)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid mobile number format'
       });
     }
 
-    // Normalize mobile number
-    const normalizedMobile = mobile.replace(/^\+91/, '');
-
-    // Generate and send OTP
-    const otpResult = await otpService.sendOTP(normalizedMobile);
+    // Send OTP
+    const otpResult = await sendOTP(mobile);
 
     if (otpResult.success) {
-      // Return response with OTP information
       return res.status(200).json({
         success: true,
         message: 'OTP sent successfully',
@@ -76,11 +71,8 @@ exports.verifyOTP = async (req, res) => {
       });
     }
 
-    // Normalize mobile number
-    const normalizedMobile = mobile.replace(/^\+91/, '');
-
     // Verify OTP using service
-    const verificationResult = await verifyOTP(normalizedMobile, otp);
+    const verificationResult = await verifyOTP(mobile, otp);
     
     if (verificationResult.success) {
       return res.status(200).json({
