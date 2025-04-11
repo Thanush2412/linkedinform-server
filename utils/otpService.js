@@ -149,6 +149,16 @@ const verifyOTP = async (mobileNumber, otp, requestId) => {
         // Check if verification was successful
         const isSuccess = response.data && (response.data.type === 'success' || response.data.message === 'OTP verified success');
         
+        // Handle specific authkey error
+        if (response.data && response.data.code === '201') {
+          console.error('MSG91 Authkey Error:', response.data.message);
+          return {
+            success: false,
+            message: 'OTP verification service is temporarily unavailable. Please try again later.',
+            data: response.data
+          };
+        }
+        
         return {
           success: isSuccess,
           message: isSuccess ? 'OTP verified successfully' : 'Invalid or expired OTP',
@@ -303,4 +313,4 @@ module.exports = {
   sendOTP,
   verifyOTP,
   resendOTP
-}; 
+};
