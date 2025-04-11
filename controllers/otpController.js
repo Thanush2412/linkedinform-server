@@ -1,4 +1,4 @@
-const { sendOTP, verifyOTP, resendOTP } = require('../utils/otpService');
+const { sendOTP, verifyLocalOTP, resendOTP } = require('../utils/otpService');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
 const otpService = require('../utils/otpService');
@@ -65,7 +65,7 @@ exports.sendOTP = async (req, res) => {
  */
 exports.verifyOTP = async (req, res) => {
   try {
-    const { mobile, otp, requestId } = req.body;
+    const { mobile, otp } = req.body;
 
     // Validate inputs
     if (!mobile || !otp) {
@@ -79,10 +79,10 @@ exports.verifyOTP = async (req, res) => {
     // Normalize mobile number
     const normalizedMobile = mobile.replace(/^\+91/, '');
 
-    // Verify OTP using service
-    const verificationResult = await otpService.verifyOTP(mobile, otp, requestId);
+    // Verify OTP using database
+    const verificationResult = await otpService.verifyLocalOTP(normalizedMobile, otp);
     
-    if (verificationResult.success) {
+    if (verificationResult) {
       return res.status(200).json({
         success: true,
         message: 'OTP verified successfully'
@@ -91,7 +91,7 @@ exports.verifyOTP = async (req, res) => {
 
     return res.status(400).json({
       success: false,
-      message: verificationResult.message
+      message: 'Invalid or expired OTP'
     });
   } catch (error) {
     console.error('Verify OTP Error:', error);
