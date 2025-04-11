@@ -81,7 +81,8 @@ exports.verifyOTP = async (req, res) => {
       console.log('OTP Verification Failed: Missing required parameters');
       return res.status(400).json({
         success: false,
-        message: 'Mobile number, OTP and request ID are required'
+        message: 'Mobile number, OTP and request ID are required',
+        errorCode: 'MISSING_PARAMS'
       });
     }
     
@@ -89,7 +90,8 @@ exports.verifyOTP = async (req, res) => {
       console.log('OTP Verification Failed: OTP format invalid');
       return res.status(400).json({
         success: false,
-        message: 'OTP must be a 6-digit number'
+        message: 'OTP must be a 6-digit number',
+        errorCode: 'INVALID_OTP_FORMAT'
       });
     }
     
@@ -106,16 +108,30 @@ exports.verifyOTP = async (req, res) => {
       });
     } else {
       console.log(`OTP Verification Failed: ${verifyResponse.message}`);
-      return res.status(400).json({
+      
+      // Map error codes to appropriate HTTP status
+      const errorStatusMap = {
+        'CONFIG_ERROR': 500,
+        'VERIFICATION_FAILED': 400,
+        'API_ERROR': 500,
+        'UNKNOWN_ERROR': 500,
+        'SYSTEM_ERROR': 500
+      };
+      
+      const statusCode = errorStatusMap[verifyResponse.errorCode] || 400;
+      
+      return res.status(statusCode).json({
         success: false,
-        message: verifyResponse.message || 'Invalid or expired OTP'
+        message: verifyResponse.message || 'Invalid or expired OTP',
+        errorCode: verifyResponse.errorCode
       });
     }
   } catch (error) {
     console.error('Verify OTP Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error while verifying OTP'
+      message: 'Server error while verifying OTP',
+      errorCode: 'INTERNAL_SERVER_ERROR'
     });
   }
 };
