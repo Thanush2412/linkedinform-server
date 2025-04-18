@@ -37,6 +37,11 @@ const couponSchema = new mongoose.Schema({
   expiryDate: {
     type: Date
   },
+  // Custom LinkedIn URL for this coupon (if provided)
+  linkedInUrl: {
+    type: String,
+    trim: true
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -77,17 +82,46 @@ const couponSchema = new mongoose.Schema({
       type: Date,
       default: Date.now
     },
+    viewTime: {
+      type: Date
+    },
     ipAddress: String,
     userAgent: String,
+    source: String,
     formId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Form'
+    },
+    // Add formSlug field to store the slug as a string
+    formSlug: String,
+    // Additional fields for enhanced tracking
+    formName: String,
+    linkedInUrl: String,
+    registrationTime: {
+      type: Date
+    },
+    formData: {
+      type: Object
+    },
+    fromSuccessBanner: {
+      type: Boolean,
+      default: false
     }
   }],
   // Track which form this coupon is associated with (optional)
   formId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Form'
+  },
+  // Track which upload this coupon came from
+  uploadId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CouponUpload'
+  },
+  // Track if this coupon has been used
+  isUsed: {
+    type: Boolean,
+    default: false
   },
   // New field to store additional data from Excel/CSV
   metadata: {

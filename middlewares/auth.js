@@ -10,7 +10,31 @@ exports.authenticate = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Authentication token missing' });
     }
 
-    // Verify token
+    // Check if this is an employee access token
+    if (token === 'user-access-token') {
+      // For employee login (restricted access), we don't verify with JWT
+      // Instead, check if the request has the employee number in the query or body
+      const employeeNumber = req.query.employeeNumber || req.body.employeeNumber;
+      
+      if (!employeeNumber) {
+        return res.status(401).json({ 
+          success: false, 
+          message: 'Employee number is required for restricted access' 
+        });
+      }
+      
+      // Create a minimal user object for the request
+      req.user = {
+        role: 'user',
+        employeeNumber: employeeNumber,
+        name: `User ${employeeNumber}`,
+        _id: 'employee-user'
+      };
+      
+      return next();
+    }
+
+    // Regular JWT verification for normal users
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
     // Find user by id
@@ -46,13 +70,5 @@ exports.canAccessSummary = (req, res, next) => {
     next();
   } else {
     return res.status(403).json({ success: false, message: 'Access denied: Authentication required' });
-  }
-};
-
-exports.isSuperAdmin = (req, res, next) => {
-  if (req.user && (req.user.role === 'admin' || req.user.role === 'superadmin')) {
-    next();
-  } else {
-    return res.status(403).json({ success: false, message: 'Access denied: Admin or Superadmin role required' });
   }
 };

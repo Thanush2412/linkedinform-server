@@ -47,14 +47,14 @@ router.delete('/:id',
 // Bulk operations - superadmin only
 router.post('/bulk', 
   authMiddleware.authenticate, 
-  authMiddleware.isSuperAdmin, 
+  authMiddleware.isAdmin, 
   userController.bulkCreateUsers
 );
 
 // Get user activity log - superadmin only
 router.get('/:id/activity', 
   authMiddleware.authenticate, 
-  authMiddleware.isSuperAdmin, 
+  authMiddleware.isAdmin, 
   userController.getUserActivity
 );
 

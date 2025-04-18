@@ -66,9 +66,91 @@ const handleMulterErrors = (err, req, res, next) => {
   next();
 };
 
+// Debug route to help troubleshoot API issues
+router.get('/debug', (req, res) => {
+  // Log headers for debugging
+  console.log('Request headers:', req.headers);
+  
+  // Check for authorization header
+  const authHeader = req.header('Authorization');
+  if (!authHeader) {
+    return res.status(200).json({
+      success: false,
+      message: 'Debug info: No Authorization header found',
+      fix: 'Make sure your client is sending the Authorization header with Bearer token'
+    });
+  }
+  
+  // Try to extract token
+  const token = authHeader.replace('Bearer ', '');
+  if (!token || token === authHeader) {
+    return res.status(200).json({
+      success: false,
+      message: 'Debug info: Authorization header does not contain a valid Bearer token',
+      fix: 'Format should be: Authorization: Bearer YOUR_TOKEN'
+    });
+  }
+  
+  // Try to decode token without verification
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.decode(token);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Debug info: Token format appears valid',
+      tokenInfo: {
+        decoded,
+        expires: decoded ? new Date(decoded.exp * 1000).toISOString() : 'Unknown'
+      },
+      routes: {
+        root: '/api/forms - Requires auth',
+        all: '/api/forms/all - Requires auth',
+        debug: '/api/forms/debug - No auth required'
+      }
+    });
+  } catch (error) {
+    return res.status(200).json({
+      success: false,
+      message: 'Debug info: Cannot decode token',
+      error: error.message
+    });
+  }
+});
+
+// Public forms list for debugging
+router.get('/public-list', async (req, res) => {
+  try {
+    const Form = require('../models/Form');
+    const forms = await Form.find()
+      .select('college slug activation deactivation _id')
+      .sort({ createdAt: -1 })
+      .limit(10);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Public forms list for debugging',
+      data: forms
+    });
+  } catch (error) {
+    console.error('Error in public forms list:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error in public forms list',
+      error: error.message
+    });
+  }
+});
+
 // Public routes
 router.get('/details/:slug', formController.getFormBySlug);
 router.get('/stats/:slug', formController.getFormStats);
+
+// Employee route - get forms by employee number (no authentication required for restricted users)
+router.get('/employee/:employeeNumber', formController.getFormsByEmployeeNumber);
+
+// Root route - also gets all forms
+router.get('/', authMiddleware.authenticate, authMiddleware.isAdmin, formController.getAllForms);
 
 // Protected routes
 router.post(

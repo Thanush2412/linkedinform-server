@@ -1,12 +1,16 @@
+const mongoose = require('mongoose');
 const Coupon = require('../models/Coupon');
+const CouponUpload = require('../models/CouponUpload');
 const csv = require('csv-parser');
 const fs = require('fs');
 const path = require('path');
 const { Readable } = require('stream');
 const xlsx = require('xlsx');
+const Form = require('../models/Form');
+const exceljs = require('exceljs');
 
 // Helper to process coupon data
-const processCouponData = async (coupons, userId, formId) => {
+const processCouponData = async (coupons, userId, formId = null) => {
   const results = {
     added: 0,
     errors: [],
@@ -82,7 +86,7 @@ const processCouponData = async (coupons, userId, formId) => {
         isActive: couponData.isActive === undefined ? true : (couponData.isActive === 'true' || couponData.isActive === true),
         expiryDate: couponData.expiryDate ? new Date(couponData.expiryDate) : null,
         createdBy: userId,
-        formId: couponData.formId || formId || null
+        formId: couponData.formId || formId  // Make formId optional and default to null
       };
       
       // Add any additional fields from the Excel/CSV that aren't in our standard model
@@ -112,128 +116,248 @@ const processCouponData = async (coupons, userId, formId) => {
   return results;
 };
 
-// Upload coupons from CSV or Excel file
+// Upload coupons from a file
 exports.uploadCoupons = async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ success: false, message: 'No file uploaded' });
+      return res.status(400).json({
+        success: false,
+        message: 'No file provided'
+      });
     }
 
+    const formId = req.body.formId; // Optional form ID to link coupons to
+    const isGoogleForm = req.body.isGoogleForm === 'true'; // Check if this is a Google Form response
+    
+    // Process file content based on file type
+    const filePath = req.file.path;
     const fileExt = path.extname(req.file.originalname).toLowerCase();
+    const fileName = req.file.originalname.toLowerCase();
+    
     let coupons = [];
-    const formId = req.body.formId || null;
-
-    // Process CSV file
-    if (fileExt === '.csv') {
-      const results = [];
-      await new Promise((resolve, reject) => {
-        const readableStream = new Readable();
-        readableStream._read = () => {};
-        readableStream.push(req.file.buffer);
-        readableStream.push(null);
-
-        readableStream
-          .pipe(csv())
-          .on('data', (data) => results.push(data))
-          .on('end', () => resolve())
-          .on('error', (err) => reject(err));
-      });
-      coupons = results;
-    } 
+    let errorMessage = '';
+    
+    try {
+      if (fileExt === '.xlsx' || fileExt === '.xls') {
     // Process Excel file
-    else if (fileExt === '.xlsx' || fileExt === '.xls') {
-      const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
-      
-      // Try to get data from all sheets
-      let allSheetData = [];
-      
-      for (const sheetName of workbook.SheetNames) {
-        const worksheet = workbook.Sheets[sheetName];
-        const sheetData = xlsx.utils.sheet_to_json(worksheet, { defval: '' });
+        const workbook = xlsx.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const data = xlsx.utils.sheet_to_json(sheet, { header: 1, raw: false });
         
-        if (sheetData && sheetData.length > 0) {
-          // Add sheet name to each row for tracking
-          const dataWithSheetName = sheetData.map(row => ({
-            ...row,
-            _sheetName: sheetName
-          }));
-          allSheetData = [...allSheetData, ...dataWithSheetName];
-        } else {
-          // Try to extract data from all columns if no structured data found
-          const range = xlsx.utils.decode_range(worksheet['!ref']);
-          const codes = [];
+        // Check if this is likely a Google Form response
+        const isGFormResponse = fileName.includes('form response') || isGoogleForm;
+        
+        if (isGFormResponse && data.length > 1) {
+          // Google Forms typically have headers in the first row
+          // Look for columns that might contain the coupon code
+          const headerRow = data[0];
           
-          // Process each row
-          for (let row = range.s.r; row <= range.e.r; row++) {
-            const rowData = {};
-            // Process each column
-            for (let col = range.s.c; col <= range.e.c; col++) {
-              const cellAddress = xlsx.utils.encode_cell({ r: row, c: col });
-              const cell = worksheet[cellAddress];
-              if (cell && cell.v !== undefined) {
-                // For the first row, use cell value as header
-                if (row === range.s.r) {
-                  rowData[`col_${col}`] = cell.v.toString().trim();
+          // Find the index of columns that might contain coupon codes
+          const possibleCodeColumns = ['code', 'coupon', 'coupon code', 'linkedin', 'premium'];
+          let codeColumnIndex = -1;
+          
+          for (let i = 0; i < headerRow.length; i++) {
+            const header = (headerRow[i] || '').toString().toLowerCase();
+            if (possibleCodeColumns.some(col => header.includes(col))) {
+              codeColumnIndex = i;
+              break;
+            }
+          }
+          
+          // If we found a likely coupon column, extract those values
+          if (codeColumnIndex !== -1) {
+            // Start from row 1 (skipping header)
+            for (let i = 1; i < data.length; i++) {
+              if (data[i] && data[i][codeColumnIndex]) {
+                const code = data[i][codeColumnIndex].toString().trim();
+                if (code) coupons.push(code);
+              }
+            }
                 } else {
-                  // For other rows, use the header from first row
-                  const headerAddress = xlsx.utils.encode_cell({ r: range.s.r, c: col });
-                  const headerCell = worksheet[headerAddress];
-                  const header = headerCell ? headerCell.v.toString().trim() : `col_${col}`;
-                  rowData[header] = cell.v.toString().trim();
+            // If we can't find a specific coupon column, try the first column with non-empty data
+            for (let i = 1; i < data.length; i++) {
+              // Find the first non-empty cell in this row
+              if (data[i]) {
+                for (let j = 0; j < data[i].length; j++) {
+                  if (data[i][j]) {
+                    const code = data[i][j].toString().trim();
+                    if (code) {
+                      coupons.push(code);
+                      break; // Only take the first non-empty cell
+                    }
+                  }
                 }
               }
             }
-            // Only add rows that have actual data
-            if (Object.values(rowData).some(value => value && value.length > 0)) {
-              codes.push({
-                ...rowData,
-                _sheetName: sheetName
-              });
+          }
+        } else {
+          // Standard Excel handling (non-Google Form)
+          // Extract coupon codes from first column
+          for (let i = 0; i < data.length; i++) {
+            if (data[i] && data[i][0]) {
+              const code = data[i][0].toString().trim();
+              if (code) coupons.push(code);
             }
           }
-          if (codes.length > 0) {
-            allSheetData = [...allSheetData, ...codes];
+        }
+      } else if (fileExt === '.csv' || fileExt === '.txt') {
+        // Process CSV or text file
+        const content = fs.readFileSync(filePath, 'utf8');
+        
+        // Check if this is likely a Google Form response
+        const isGFormResponse = fileName.includes('form response') || isGoogleForm;
+        
+        if (isGFormResponse) {
+          // Google Form CSVs typically have headers and a more complex structure
+          // First, try to handle it by parsing it properly
+          const lines = content.split(/\r?\n/).filter(line => line.trim());
+          
+          if (lines.length > 1) {
+            // First line is likely headers
+            const headers = lines[0].split(',').map(h => h.toLowerCase().trim());
+            
+            // Find columns that might contain the coupon code
+            const possibleCodeColumns = ['code', 'coupon', 'coupon code', 'linkedin', 'premium'];
+            let codeColumnIndex = -1;
+            
+            for (let i = 0; i < headers.length; i++) {
+              if (possibleCodeColumns.some(col => headers[i].includes(col))) {
+                codeColumnIndex = i;
+                break;
+              }
+            }
+            
+            // If we found a likely coupon column, extract those values
+            if (codeColumnIndex !== -1) {
+              // Start from line 1 (skipping header)
+              for (let i = 1; i < lines.length; i++) {
+                const columns = lines[i].split(',');
+                if (columns[codeColumnIndex]) {
+                  const code = columns[codeColumnIndex].replace(/["']/g, '').trim();
+                  if (code) coupons.push(code);
+                }
+              }
+            } else {
+              // If we can't find a specific column, try to get all non-empty values from each line
+              for (let i = 1; i < lines.length; i++) {
+                const columns = lines[i].split(',');
+                // Take the first non-empty value
+                for (let j = 0; j < columns.length; j++) {
+                  const code = columns[j].replace(/["']/g, '').trim();
+                  if (code) {
+                    coupons.push(code);
+                    break; // Only take the first non-empty value per line
+                  }
+                }
+              }
+            }
           }
+        } else {
+          // Standard CSV/TXT handling (one code per line)
+          coupons = content.split(/[\r\n,]+/)
+            .map(code => code.replace(/["']/g, '').trim().toUpperCase())
+            .filter(Boolean);
+        }
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Unsupported file format. Please upload .xlsx, .xls, .csv, or .txt file.'
+        });
+      }
+    } catch (error) {
+      console.error('Error processing file:', error);
+      errorMessage = error.message;
+      
+      // If error occurred but file is valid, try a more basic approach
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf8');
+        // Brute force: extract any word character sequences as potential codes
+        const matches = content.match(/\b\w+\b/g);
+        if (matches && matches.length > 0) {
+          coupons = matches
+            .map(code => code.trim().toUpperCase())
+            .filter(code => code.length >= 4); // Only consider codes with at least 4 characters
         }
       }
-      
-      coupons = allSheetData;
-    } 
-    // Handle simple text files with one coupon per line
-    else if (fileExt === '.txt') {
-      const content = req.file.buffer.toString('utf8');
-      coupons = content.split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .map(code => ({ code }));
+    } finally {
+      // Clean up the uploaded file
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     }
-    else {
-      return res.status(400).json({ success: false, message: 'Unsupported file format. Please upload CSV, Excel, or TXT file.' });
-    }
-
-    // Handle empty file
-    if (!coupons || coupons.length === 0) {
-      return res.status(400).json({ success: false, message: 'No coupon data found in the file' });
-    }
-
-    console.log(`Processing ${coupons.length} coupons from uploaded file`);
     
-    // Process coupons
-    const results = await processCouponData(coupons, req.user.id, formId);
+    if (coupons.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid coupon codes found in the file. ' + 
+                 (errorMessage ? `Error: ${errorMessage}` : 'Please check file format.')
+      });
+    }
+    
+    // Check for duplicates
+    const uniqueCoupons = [...new Set(coupons)];
+    const duplicates = coupons.length - uniqueCoupons.length;
+    
+    // Check for existing coupons in the database
+    const existingCoupons = await Coupon.find({ code: { $in: uniqueCoupons } });
+    const existingCodes = existingCoupons.map(c => c.code);
+    const newCoupons = uniqueCoupons.filter(code => !existingCodes.includes(code));
+    
+    // Create coupon upload record
+    const uploadRecord = new CouponUpload({
+      fileName: req.file.originalname,
+      originalName: req.file.originalname,
+      uploadDate: new Date(),
+      uploadedBy: req.user._id,
+      formId: formId || null,
+      couponsAdded: newCoupons.length,
+      couponsUsed: 0
+    });
+    
+    const savedUpload = await uploadRecord.save();
+    
+    // Get form deactivation date if form ID is provided
+    let expiryDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // Default 1 year
+    if (formId) {
+      const form = await Form.findById(formId);
+      if (form && form.deactivation) {
+        expiryDate = form.deactivation;
+      }
+    }
+    
+    // Create coupon documents with reference to the upload
+    if (newCoupons.length > 0) {
+      const couponDocs = newCoupons.map(code => ({
+        code,
+        maxUses: 1,
+        isActive: true,
+        formId: formId || null,
+        uploadId: savedUpload._id,
+        expiryDate: expiryDate,
+        createdAt: new Date()
+      }));
+      
+      await Coupon.insertMany(couponDocs);
+    }
 
     return res.status(200).json({
       success: true,
-      message: `Uploaded ${results.added} coupons. ${results.duplicates} duplicates skipped. ${results.errors.length} errors.`,
-      data: results.processed,
-      details: {
-        added: results.added,
-        duplicates: results.duplicates,
-        errors: results.errors
-      }
+      message: 'Coupons uploaded successfully',
+      added: newCoupons.length,
+      duplicates: duplicates + existingCodes.length,
+      total: coupons.length,
+      errors: coupons.length === 0 ? ['No valid coupon codes found in the file'] : [],
+      uploadId: savedUpload._id, // Return the upload ID to enable automatic viewing
+      coupons: newCoupons // Return the list of coupon codes for immediate display
     });
   } catch (error) {
     console.error('Error uploading coupons:', error);
-    return res.status(500).json({ success: false, message: 'Server error while uploading coupons' });
+    return res.status(500).json({
+      success: false,
+      message: 'Error uploading coupons',
+      error: error.message
+    });
   }
 };
 
@@ -415,41 +539,267 @@ exports.applyCoupon = async (req, res) => {
   }
 };
 
-// Track when a coupon code is copied
-exports.trackCouponCopy = async (req, res) => {
+// Format LinkedIn coupon URL
+const formatLinkedInCouponUrl = (couponCode) => {
+  // Remove any "THANKS-" prefix if it exists
+  const cleanCode = couponCode.replace(/^THANKS-/i, '');
+  return `http://www.linkedin.com/premium/redeem/gift?_ed=${cleanCode}&mcid=7185883047605547008`;
+};
+
+// Get a coupon's LinkedIn URL
+exports.getLinkedInCouponUrl = async (req, res) => {
   try {
-    const { code, formId } = req.body;
-    const ipAddress = req.ip || req.connection.remoteAddress;
-    const userAgent = req.headers['user-agent'];
+    const { code } = req.params;
     
     if (!code) {
-      return res.status(400).json({ success: false, message: 'Coupon code is required' });
+      return res.status(400).json({
+        success: false,
+        message: 'Coupon code is required'
+      });
     }
     
-    // Find coupon by code
+    // Check if the coupon exists
     const coupon = await Coupon.findOne({ code: code.toUpperCase() });
     
     if (!coupon) {
-      return res.status(404).json({ success: false, message: 'Coupon not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Coupon not found'
+      });
     }
     
-    // Add copy event
-    coupon.copyEvents.push({
-      timestamp: new Date(),
-      ipAddress,
-      userAgent,
-      formId
-    });
+    // Track the view event (optional)
+    if (req.query.track === 'true') {
+      const copyEvent = {
+        timestamp: new Date(),
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        source: req.query.source || 'url_view',
+        formId: req.query.formId || null
+      };
+      
+      coupon.copyEvents.unshift(copyEvent);
+      await coupon.save();
+    }
     
-    await coupon.save();
-    
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Coupon copy event tracked successfully'
+      url: formatLinkedInCouponUrl(coupon.code),
+      code: coupon.code
+    });
+  } catch (error) {
+    console.error('Error getting LinkedIn coupon URL:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while getting LinkedIn coupon URL'
+    });
+  }
+};
+
+// Track when a coupon code is copied
+exports.trackCouponCopy = async (req, res) => {
+  try {
+    const { 
+      couponCode, 
+      formId,
+      formSlug,
+      formName, 
+      linkedInUrl, 
+      source, 
+      viewTime, 
+      registrationTime, 
+      formData, 
+      fromSuccessBanner
+    } = req.body;
+    
+    if (!couponCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Coupon code is required'
+      });
+    }
+    
+    // Find the coupon by code
+    const coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
+
+    if (!coupon) {
+      return res.status(404).json({
+        success: false,
+        message: 'Coupon not found'
+      });
+    }
+
+    // Create the copy event
+    const copyEvent = {
+      timestamp: new Date(),
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+      source: source || 'manual',
+      // Only use formId if it's a valid MongoDB ObjectId
+      // If formSlug is provided, store it as a string property
+      formSlug: formSlug || null,
+      // Add additional tracking fields
+      formName: formName || null,
+      linkedInUrl: linkedInUrl || formatLinkedInCouponUrl(coupon.code),
+      fromSuccessBanner: fromSuccessBanner || false
+    };
+    
+    // Add view time if provided (for tracking when the URL was first seen)
+    if (viewTime) {
+      copyEvent.viewTime = new Date(viewTime);
+    }
+
+    // Add registration time if provided
+    if (registrationTime) {
+      copyEvent.registrationTime = new Date(registrationTime);
+    }
+
+    // Add form data if provided
+    if (formData) {
+      copyEvent.formData = formData;
+    }
+
+    // Add to beginning of array (most recent first)
+    coupon.copyEvents.unshift(copyEvent);
+    await coupon.save();
+
+    return res.status(200).json({
+      success: true, 
+      message: 'Coupon copy event tracked',
+      linkedInUrl: linkedInUrl || formatLinkedInCouponUrl(coupon.code)
     });
   } catch (error) {
     console.error('Error tracking coupon copy:', error);
-    res.status(500).json({ success: false, message: 'Error tracking coupon copy', error: error.message });
+    return res.status(500).json({
+      success: false, 
+      message: 'Server error while tracking coupon copy'
+    });
+  }
+};
+
+// Track bulk coupon copy operations
+exports.trackBulkCopy = async (req, res) => {
+  try {
+    const { 
+      count, 
+      operation, 
+      formId, 
+      formName, 
+      viewTime, 
+      source, 
+      couponIds,
+      includesLinkedInUrls 
+    } = req.body;
+    
+    if (!couponIds || !Array.isArray(couponIds) || couponIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Coupon IDs are required'
+      });
+    }
+
+    // Process each coupon in the bulk operation
+    const results = await Promise.all(couponIds.map(async (couponId) => {
+      try {
+        // Find the coupon by ID
+        const coupon = await Coupon.findById(couponId);
+        
+        if (!coupon) {
+          return { 
+            success: false, 
+            couponId, 
+            message: 'Coupon not found' 
+          };
+        }
+
+        // Create the copy event
+        const copyEvent = {
+          timestamp: new Date(),
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'],
+          source: source || 'bulk_copy',
+          formName: formName || null,
+          // Add LinkedIn URL information if this was a URL copy operation
+          linkedInUrl: includesLinkedInUrls ? formatLinkedInCouponUrl(coupon.code) : null,
+          bulkOperation: {
+            operation: operation || 'copy',
+            totalCopied: count
+          }
+        };
+        
+        // Add view time if provided
+        if (viewTime) {
+          copyEvent.viewTime = new Date(viewTime);
+        }
+
+        // Add to beginning of array (most recent first)
+        coupon.copyEvents.unshift(copyEvent);
+        await coupon.save();
+        
+        return { 
+          success: true, 
+          couponId, 
+          message: 'Copy event tracked' 
+        };
+      } catch (err) {
+        console.error(`Error tracking copy for coupon ${couponId}:`, err);
+        return { 
+          success: false, 
+          couponId, 
+          message: err.message 
+        };
+      }
+    }));
+    
+    // Count successes and failures
+    const successes = results.filter(r => r.success).length;
+    const failures = results.filter(r => !r.success).length;
+
+    return res.status(200).json({
+      success: true,
+      message: `Bulk copy tracked for ${successes} coupons (${failures} failed)`,
+      details: results,
+      operation: operation || 'copy',
+      totalCopied: count
+    });
+  } catch (error) {
+    console.error('Error tracking bulk copy:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while tracking bulk copy'
+    });
+  }
+};
+
+// Get all coupons
+exports.getCoupons = async (req, res) => {
+  try {
+    const coupons = await Coupon.find()
+      .populate('formId', 'name')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json(coupons);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get single coupon
+exports.getCouponById = async (req, res) => {
+  try {
+    const coupon = await Coupon.findById(req.params.id)
+      .populate('formId', 'name')
+      .populate('createdBy', 'name email')
+      .populate('usedBy.registrationId', 'name email');
+
+    if (!coupon) {
+      return res.status(404).json({ success: false, message: 'Coupon not found' });
+    }
+
+    res.status(200).json(coupon);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -578,8 +928,7 @@ exports.getCouponExportData = async (req, res) => {
         maxUses: coupon.maxUses,
         usedCount: coupon.usedCount,
         isActive: coupon.isActive,
-        createdAt: coupon.createdAt,
-        updatedAt: coupon.updatedAt,
+        expiryDate: coupon.expiryDate ? new Date(coupon.expiryDate).toISOString().split('T')[0] : '',
         formId: coupon.formId ? coupon.formId._id : null,
         formName: coupon.formId ? coupon.formId.college : null
       },
@@ -810,5 +1159,432 @@ exports.exportAllCoupons = async (req, res) => {
   } catch (error) {
     console.error('Error exporting coupons:', error);
     return res.status(500).json({ success: false, message: 'Error exporting coupons' });
+  }
+};
+
+// Get all coupon uploads
+exports.getCouponUploads = async (req, res) => {
+  try {
+    // Get coupon uploads with basic information
+    const uploads = await CouponUpload.find()
+      .populate('uploadedBy', 'name email')
+      .sort({ uploadDate: -1 });
+    
+    // Return uploads with coupon counts
+    const uploadsWithStats = await Promise.all(uploads.map(async (upload) => {
+      const uploadObj = upload.toObject();
+      uploadObj.couponsUsed = await Coupon.countDocuments({ 
+        uploadId: upload._id,
+        usedCount: { $gt: 0 } 
+      });
+      return uploadObj;
+    }));
+    
+    return res.status(200).json({
+      success: true,
+      data: uploadsWithStats
+    });
+  } catch (error) {
+    console.error('Error getting coupon uploads:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get coupon uploads',
+      error: error.message
+    });
+  }
+};
+
+// Get coupon upload details with all coupons
+exports.getCouponUploadDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Find the upload
+    const upload = await CouponUpload.findById(id)
+      .populate('uploadedBy', 'name email');
+    
+    if (!upload) {
+      return res.status(404).json({
+        success: false,
+        message: 'Coupon upload not found'
+      });
+    }
+    
+    // Get all coupons from this upload
+    const coupons = await Coupon.find({ uploadId: id });
+    
+    // Count used coupons
+    const usedCount = coupons.filter(coupon => coupon.usedCount > 0).length;
+    
+    // Add used count to upload
+    const uploadWithStats = {
+      ...upload.toObject(),
+      couponsUsed: usedCount
+    };
+    
+    return res.status(200).json({
+      success: true,
+      upload: uploadWithStats,
+      coupons
+    });
+  } catch (error) {
+    console.error('Error getting coupon upload details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get coupon upload details',
+      error: error.message
+    });
+  }
+};
+
+// Download coupon file by upload ID
+exports.downloadCouponFile = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { includeLinkedInUrls } = req.query;
+    
+    // Verify upload exists and belongs to user's organization
+    const upload = await CouponUpload.findById(id);
+    if (!upload) {
+      return res.status(404).json({
+        success: false,
+        message: 'Coupon upload not found'
+      });
+    }
+    
+    // Find all coupons associated with this upload
+    const coupons = await Coupon.find({ uploadId: id });
+    
+    // Create workbook and worksheet
+    const workbook = new exceljs.Workbook();
+    const worksheet = workbook.addWorksheet('Coupons');
+    
+    // Define columns
+    const columns = [
+      { header: 'Coupon Code', key: 'code', width: 20 },
+      { header: 'Status', key: 'status', width: 15 },
+      { header: 'Used', key: 'used', width: 10 }
+    ];
+    
+    // Add LinkedIn URL column if requested
+    if (includeLinkedInUrls === 'true') {
+      columns.push({ header: 'LinkedIn Premium URL', key: 'linkedInUrl', width: 70 });
+    }
+    
+    // Set the columns
+    worksheet.columns = columns;
+    
+    // Add rows for each coupon
+    coupons.forEach(coupon => {
+      const row = {
+        code: coupon.code,
+        status: coupon.isActive ? 'Active' : 'Inactive',
+        used: coupon.usedCount > 0 ? 'Yes' : 'No'
+      };
+      
+      // Add LinkedIn URL if requested
+      if (includeLinkedInUrls === 'true') {
+        row.linkedInUrl = formatLinkedInCouponUrl(coupon.code);
+      }
+      
+      worksheet.addRow(row);
+    });
+    
+    // Style the header row
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' }
+    };
+    
+    // Auto-filter and freeze top row
+    worksheet.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: 1, column: includeLinkedInUrls === 'true' ? 4 : 3 }
+    };
+    worksheet.views = [
+      { state: 'frozen', ySplit: 1 }
+    ];
+    
+    // Set response headers for file download
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=coupons-${id}.xlsx`);
+    
+    // Write to response stream
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Error downloading coupon file:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generating coupon download'
+    });
+  }
+};
+
+// Delete a coupon upload and associated coupons
+exports.deleteCouponUpload = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const force = req.query.force === 'true';
+    const unusedOnly = req.query.unusedOnly === 'true';
+    
+    // First check if the upload exists
+    const upload = await CouponUpload.findById(id);
+    if (!upload) {
+      return res.status(404).json({ success: false, message: 'Coupon upload not found' });
+    }
+    
+    // Check if any coupons from this upload have been used
+    const usedCoupons = await Coupon.countDocuments({ 
+      uploadId: id,
+      usedCount: { $gt: 0 }
+    });
+    
+    // If there are used coupons and we're not forcing or only deleting unused
+    if (usedCoupons > 0 && !force && !unusedOnly) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Cannot delete upload as ${usedCoupons} coupons have already been used.`
+      });
+    }
+    
+    // If unusedOnly is set, delete only unused coupons
+    if (unusedOnly) {
+      // Delete only the unused coupons
+      await Coupon.deleteMany({ 
+        uploadId: id,
+        usedCount: 0 
+      });
+      
+      // Don't delete the upload record, just update the count
+      const remainingCoupons = await Coupon.countDocuments({ uploadId: id });
+      
+      return res.status(200).json({
+        success: true,
+        message: `Successfully deleted all unused coupons. ${remainingCoupons} used coupons remain.`
+      });
+    } else {
+      // Force delete all coupons or regular delete when no used coupons
+      await Coupon.deleteMany({ uploadId: id });
+      
+      // Delete the upload record
+      await CouponUpload.findByIdAndDelete(id);
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Coupon upload and associated coupons deleted successfully'
+      });
+    }
+  } catch (error) {
+    console.error('Error deleting coupon upload:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error deleting coupon upload',
+      error: error.message
+    });
+  }
+};
+
+// Update coupon upload count after individual coupon deletion
+exports.updateCouponUploadCount = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { count } = req.body;
+    
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Upload ID is required' });
+    }
+    
+    // Find the upload record
+    const upload = await CouponUpload.findById(id);
+    
+    if (!upload) {
+      return res.status(404).json({ success: false, message: 'Coupon upload not found' });
+    }
+    
+    // Calculate new count (ensure it doesn't go below 0)
+    const newCount = Math.max(0, upload.couponsAdded + (count || -1));
+    
+    // Update the upload record
+    await CouponUpload.findByIdAndUpdate(id, { couponsAdded: newCount });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Coupon count updated successfully',
+      newCount
+    });
+  } catch (error) {
+    console.error('Error updating coupon count:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error updating coupon count',
+      error: error.message
+    });
+  }
+};
+
+// Get all coupons with filters
+exports.getAllCoupons = async (req, res) => {
+  try {
+    const { search, formId, status, usageStatus, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    
+    // Build filter query
+    const filter = {};
+    
+    if (search) {
+      filter.code = { $regex: search, $options: 'i' };
+    }
+    
+    if (formId) {
+      filter.formId = formId;
+    }
+    
+    if (status === 'active') {
+      filter.isActive = true;
+    } else if (status === 'inactive') {
+      filter.isActive = false;
+    }
+    
+    // Get all coupons matching the filter
+    let coupons = await Coupon.find(filter)
+      .populate('formId', 'title college slug')
+      .sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1 });
+    
+    // Apply usage status filter (this can't be done in the DB query easily)
+    if (usageStatus === 'used') {
+      coupons = coupons.filter(coupon => coupon.usedCount > 0);
+    } else if (usageStatus === 'unused') {
+      coupons = coupons.filter(coupon => coupon.usedCount === 0);
+    } else if (usageStatus === 'partial') {
+      coupons = coupons.filter(coupon => coupon.usedCount > 0 && coupon.usedCount < coupon.maxUses);
+    }
+    
+    return res.status(200).json({
+      success: true,
+      data: coupons
+    });
+  } catch (error) {
+    console.error('Error getting coupons:', error);
+    return res.status(500).json({ success: false, message: 'Error getting coupons' });
+  }
+};
+
+// Upload pre-defined LinkedIn coupons for a specific form
+exports.uploadLinkedInCoupons = async (req, res) => {
+  try {
+    const { formSlug, coupons } = req.body;
+    
+    if (!formSlug || !coupons || !Array.isArray(coupons) || coupons.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Form slug and coupons array are required'
+      });
+    }
+    
+    // Find the form by slug
+    const form = await Form.findOne({ slug: formSlug });
+    if (!form) {
+      return res.status(404).json({
+        success: false,
+        message: 'Form not found'
+      });
+    }
+    
+    console.log(`Uploading ${coupons.length} LinkedIn coupons for form: ${formSlug}`);
+    
+    // Create a coupon upload record
+    const couponUpload = new CouponUpload({
+      formId: form._id,
+      uploadedBy: req.user ? req.user._id : null,
+      count: coupons.length,
+      source: 'manual_upload',
+      type: 'linkedin_coupons',
+      metadata: {
+        formSlug,
+        uploadTime: new Date()
+      }
+    });
+    
+    await couponUpload.save();
+    
+    // Process each coupon
+    const results = {
+      total: coupons.length,
+      success: 0,
+      errors: []
+    };
+    
+    for (const couponData of coupons) {
+      try {
+        if (!couponData.code || !couponData.linkedInUrl) {
+          results.errors.push({
+            code: couponData.code || 'MISSING',
+            error: 'Coupon code and LinkedIn URL are required'
+          });
+          continue;
+        }
+        
+        // Check if coupon already exists
+        const existingCoupon = await Coupon.findOne({ code: couponData.code });
+        
+        if (existingCoupon) {
+          // Update existing coupon
+          existingCoupon.linkedInUrl = couponData.linkedInUrl;
+          existingCoupon.formId = form._id;
+          existingCoupon.isActive = true;
+          existingCoupon.uploadId = couponUpload._id;
+          existingCoupon.expiryDate = couponData.expiryDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 year default
+          
+          await existingCoupon.save();
+        } else {
+          // Create new coupon
+          const coupon = new Coupon({
+            code: couponData.code,
+            linkedInUrl: couponData.linkedInUrl,
+            formId: form._id,
+            isActive: true,
+            isPercentage: true,
+            discount: 0,
+            maxUses: 1,
+            usedCount: 0,
+            isUsed: false,
+            uploadId: couponUpload._id,
+            expiryDate: couponData.expiryDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) // 1 year default
+          });
+          
+          await coupon.save();
+        }
+        
+        results.success++;
+      } catch (error) {
+        console.error(`Error processing coupon ${couponData.code}:`, error);
+        results.errors.push({
+          code: couponData.code || 'UNKNOWN',
+          error: error.message
+        });
+      }
+    }
+    
+    // Update upload record with results
+    couponUpload.processedCount = results.success;
+    couponUpload.status = 'completed';
+    couponUpload.metadata.results = results;
+    await couponUpload.save();
+    
+    return res.status(200).json({
+      success: true,
+      message: `Uploaded ${results.success} LinkedIn coupons for form: ${formSlug}`,
+      results
+    });
+    
+  } catch (error) {
+    console.error('Error uploading LinkedIn coupons:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to upload LinkedIn coupons',
+      error: error.message
+    });
   }
 };

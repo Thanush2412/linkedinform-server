@@ -30,6 +30,17 @@ app.use(express.urlencoded({ extended: true }));
 // Configure logging
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
+// Add debug middleware to log all requests
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  const originalSend = res.send;
+  res.send = function(data) {
+    console.log(`[${new Date().toISOString()}] Response status: ${res.statusCode}`);
+    return originalSend.call(res, data);
+  }
+  next();
+});
+
 // Import routes
 const authRoutes = require('./routes/auth');
 const formRoutes = require('./routes/forms');

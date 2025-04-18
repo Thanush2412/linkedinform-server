@@ -1,5 +1,6 @@
 const Registration = require('../models/Registration');
 const Form = require('../models/Form');
+const MasterData = require('../models/MasterData');
 
 // Get registration summary by date and YOP
 exports.getSummaryByDate = async (req, res) => {
@@ -67,7 +68,6 @@ exports.getSummaryByDate = async (req, res) => {
     const registrationsList = await Registration.find(query)
       .sort({ createdAt: -1 })
       .populate('form', 'slug college')
-      .populate('coupon')
       .limit(500);
     
     // Transform to add more detailed information for each registration
@@ -903,5 +903,288 @@ exports.exportRegistrationsExcel = async (req, res) => {
   } catch (error) {
     console.error('Excel Export error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// Get registrations for the admin dashboard
+exports.getRegistrations = async (req, res) => {
+  try {
+    const { 
+      limit = 500, 
+      formId, 
+      couponStatus, 
+      search,
+      startDate,
+      endDate,
+      employeeNumber
+    } = req.query;
+    
+    // Build query
+    let query = {};
+    
+    // Filter by form if specified
+    if (formId) {
+      query.form = formId;
+    }
+    
+    // Filter by coupon status if specified
+    if (couponStatus === 'used') {
+      query.couponUsed = true;
+    } else if (couponStatus === 'unused') {
+      query.couponCode = { $exists: true, $ne: null };
+      query.couponUsed = { $ne: true };
+    } else if (couponStatus === 'nocoupon') {
+      query.couponCode = { $exists: false };
+    }
+    
+    // Filter by date range if specified
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      query.createdAt = { $gte: start, $lte: end };
+    }
+    
+    // Filter by employee number if specified
+    if (employeeNumber) {
+      query.$or = [
+        { 'dynamicFields.employee_number': employeeNumber },
+        { employee_number: employeeNumber }
+      ];
+    }
+    
+    // Search text if provided
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = query.$or || [];
+      query.$or.push(
+        { name: searchRegex },
+        { email: searchRegex },
+        { mobile: searchRegex },
+        { college: searchRegex },
+        { couponCode: searchRegex }
+      );
+    }
+    
+    // Get all forms for this user
+    const allForms = await Form.find({});
+    const formIds = allForms.map(form => form._id);
+    
+    // Add form filter to query
+    if (!formId) {
+      query.form = { $in: formIds };
+    }
+    
+    // Get registrations with all necessary fields
+    const registrations = await Registration.find(query)
+      .sort({ createdAt: -1 })
+      .populate('form', 'slug college')
+      .limit(parseInt(limit));
+    
+    // Process registrations to include additional data
+    const processedRegistrations = registrations.map(reg => {
+      const regObj = reg.toObject();
+      
+      // Add formatted fields and additional data if available
+      if (reg.couponCode) {
+        // Calculate copy time in seconds if available
+        if (reg.couponViewTime && reg.couponCopyTime) {
+          const viewTime = new Date(reg.couponViewTime);
+          const copyTime = new Date(reg.couponCopyTime);
+          regObj.copyTime = Math.round((copyTime - viewTime) / 1000);
+        }
+      }
+      
+      return regObj;
+    });
+    
+    res.json({
+      success: true,
+      registrations: processedRegistrations,
+      totalCount: await Registration.countDocuments(query)
+    });
+  } catch (error) {
+    console.error('Get registrations error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while fetching registrations',
+      error: error.message
+    });
+  }
+};
+
+// Mark attendance for a registration
+exports.markAttendance = async (req, res) => {
+  try {
+    const { registrationId, attended, employeeNumber } = req.body;
+    
+    if (!registrationId) {
+      return res.status(400).json({ success: false, message: 'Registration ID is required' });
+    }
+    
+    // Convert attendance to boolean
+    const attendanceStatus = attended === true || attended === 'true';
+    
+    console.log('Marking attendance:', { registrationId, attendanceStatus, employeeNumber });
+    
+    // First, update master data record
+    const masterData = await MasterData.findOne({ 'registration.id': registrationId });
+    
+    if (!masterData) {
+      return res.status(404).json({ success: false, message: 'Registration not found in master database' });
+    }
+    
+    // Check if request is from an employee or admin
+    const markedBy = employeeNumber ? `Employee ${employeeNumber}` : 'Admin';
+    
+    // Update master data record
+    masterData.registration.attendance = attendanceStatus;
+    masterData.registration.attendanceMarkedBy = markedBy;
+    masterData.registration.attendanceMarkedAt = new Date();
+    
+    await masterData.save();
+    
+    // Also update the original registration record if it exists
+    const registration = await Registration.findById(registrationId);
+    
+    if (registration) {
+      registration.attendance = attendanceStatus;
+      registration.attendanceMarkedBy = markedBy;
+      registration.attendanceMarkedAt = new Date();
+      
+      await registration.save();
+    }
+    
+    return res.json({ 
+      success: true, 
+      message: `Attendance ${attendanceStatus ? 'marked' : 'unmarked'} successfully`,
+      attendance: attendanceStatus,
+      markedBy: markedBy,
+      markedAt: new Date()
+    });
+  } catch (error) {
+    console.error('Error marking attendance:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// Get registrations by form slug and employee number
+exports.getRegistrationsBySlugAndEmployee = async (req, res) => {
+  try {
+    const { slug, employeeNumber } = req.query;
+    
+    if (!slug) {
+      return res.status(400).json({
+        success: false,
+        message: 'Form slug is required'
+      });
+    }
+    
+    if (!employeeNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Employee number is required'
+      });
+    }
+    
+    // Find the form with the given slug and employee number
+    const form = await Form.findOne({ 
+      slug: slug,
+      employee_number: employeeNumber,
+      isActive: true
+    });
+    
+    if (!form) {
+      return res.status(404).json({
+        success: false,
+        message: 'Form not found or you do not have access to this form'
+      });
+    }
+    
+    // Get registrations for this form
+    const registrations = await Registration.find({ form: form._id })
+      .sort({ createdAt: -1 });
+    
+    return res.json({
+      success: true,
+      registrations,
+      count: registrations.length
+    });
+  } catch (error) {
+    console.error('Error fetching registrations by slug and employee:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// Get registrations by employee number for summary page
+exports.getRegistrationsByEmployee = async (req, res) => {
+  try {
+    const { employeeNumber, slug } = req.query;
+    
+    if (!employeeNumber) {
+      return res.status(400).json({ success: false, message: 'Employee number is required' });
+    }
+    
+    // Find forms that match the employee number
+    const forms = await Form.find({ employee_number: employeeNumber });
+    
+    if (!forms || forms.length === 0) {
+      return res.json({ success: true, registrations: [], message: 'No forms found for this employee' });
+    }
+    
+    const formIds = forms.map(form => form._id);
+    
+    // If a specific slug is provided, filter to just that form
+    let query = { form: { $in: formIds } };
+    
+    if (slug) {
+      const specificForm = forms.find(form => form.slug === slug);
+      if (specificForm) {
+        query = { form: specificForm._id };
+      } else {
+        return res.json({ success: true, registrations: [], message: 'Form not found for this employee' });
+      }
+    }
+    
+    // Get registrations from Registration model
+    const registrations = await Registration.find(query).sort({ createdAt: -1 });
+    
+    // Also get attendance data from master database
+    const masterData = await MasterData.find({ 'registration.id': { $in: registrations.map(r => r._id) } });
+    
+    // Map the attendance data to the registrations
+    const registrationsWithAttendance = registrations.map(reg => {
+      const regObj = reg.toObject();
+      const masterRecord = masterData.find(md => md.registration.id.toString() === reg._id.toString());
+      
+      if (masterRecord && masterRecord.registration) {
+        regObj.attendance = masterRecord.registration.attendance || false;
+        regObj.attendanceMarkedBy = masterRecord.registration.attendanceMarkedBy;
+        regObj.attendanceMarkedAt = masterRecord.registration.attendanceMarkedAt;
+      } else {
+        regObj.attendance = false;
+      }
+      
+      return regObj;
+    });
+    
+    return res.json({ 
+      success: true, 
+      registrations: registrationsWithAttendance,
+      count: registrationsWithAttendance.length,
+      forms: forms.map(form => ({ 
+        id: form._id, 
+        slug: form.slug, 
+        college: form.college 
+      }))
+    });
+  } catch (error) {
+    console.error('Error getting registrations by employee:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };

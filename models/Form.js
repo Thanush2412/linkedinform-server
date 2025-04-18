@@ -80,6 +80,16 @@ const formSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  couponLimit: {
+    type: Number,
+    default: 0, // 0 means no limit
+    min: 0
+  },
+  employee_number: {
+    type: String,
+    trim: true,
+    required: true
+  },
   created_by: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -158,7 +168,8 @@ const formSchema = new mongoose.Schema({
     buttonText: {
       type: String,
       default: 'Submit Registration'
-    }
+    },
+    employeeNumberField: String
   }
 }, {
   timestamps: true,

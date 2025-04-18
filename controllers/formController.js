@@ -18,6 +18,7 @@ exports.createForm = async (req, res) => {
     const college = req.body.college;
     const activation = req.body.activation;
     const deactivation = req.body.deactivation;
+    const employee_number = req.body.employee_number;
     
     // Clean and parse numeric values
     let latitude, longitude, radius, coupon_limit;
@@ -46,7 +47,7 @@ exports.createForm = async (req, res) => {
     });
     
     // Validate basic fields
-    if (!college || !activation || !deactivation || isNaN(latitude) || isNaN(longitude) || isNaN(radius)) {
+    if (!college || !activation || !deactivation || isNaN(latitude) || isNaN(longitude) || isNaN(radius) || !employee_number) {
       return res.status(400).json({ 
         success: false, 
         message: 'All required fields must be provided with valid values',
@@ -157,6 +158,7 @@ exports.createForm = async (req, res) => {
         longitude,
         radius,
         coupon_limit,
+        employee_number,
         created_by: req.user._id
       };
 
@@ -319,13 +321,14 @@ exports.updateForm = async (req, res) => {
     const college = req.body.college;
     const activation = req.body.activation;
     const deactivation = req.body.deactivation;
+    const employee_number = req.body.employee_number;
     const latitude = parseFloat(String(req.body.latitude || '').trim().replace(/,+$/, ''));
     const longitude = parseFloat(String(req.body.longitude || '').trim().replace(/,+$/, ''));
     const radius = parseFloat(String(req.body.radius || '').trim());
     const coupon_limit = parseInt(String(req.body.coupon_limit || '0').trim());
     
     // Validate basic fields
-    if (!college || !activation || !deactivation || isNaN(latitude) || isNaN(longitude) || isNaN(radius)) {
+    if (!college || !activation || !deactivation || isNaN(latitude) || isNaN(longitude) || isNaN(radius) || !employee_number) {
       return res.status(400).json({ 
         success: false, 
         message: 'All required fields must be provided with valid values',
@@ -384,6 +387,7 @@ exports.updateForm = async (req, res) => {
     form.longitude = longitude;
     form.radius = radius;
     form.coupon_limit = coupon_limit;
+    form.employee_number = employee_number;
     
     await form.save();
     
@@ -564,6 +568,8 @@ exports.getFormStats = async (req, res) => {
   try {
     const { slug } = req.params;
     
+    console.log('Getting stats for form with slug:', slug);
+    
     // Find the form
     const form = await Form.findOne({ slug });
     if (!form) {
@@ -575,14 +581,21 @@ exports.getFormStats = async (req, res) => {
     
     // Get registration count
     const registrationsCount = await Registration.countDocuments({ form: form._id });
-    const limitReached = form.coupon_limit > 0 && registrationsCount >= form.coupon_limit;
-    const remainingSlots = form.coupon_limit > 0 ? Math.max(0, form.coupon_limit - registrationsCount) : null;
+    console.log('Form found:', form._id, 'Registrations count:', registrationsCount);
+    
+    // Handle the couponLimit field correctly - use the right field name and fallback to 0 if not set
+    // Check if the field exists on the form
+    const couponLimit = form.couponLimit || 0;
+    
+    // Calculate if limit is reached and remaining slots
+    const limitReached = couponLimit > 0 && registrationsCount >= couponLimit;
+    const remainingSlots = couponLimit > 0 ? Math.max(0, couponLimit - registrationsCount) : null;
     
     return res.status(200).json({
       success: true,
       formStats: {
         registrationsCount,
-        couponLimit: form.coupon_limit,
+        couponLimit,
         limitReached,
         remainingSlots
       }
@@ -590,9 +603,44 @@ exports.getFormStats = async (req, res) => {
     
   } catch (error) {
     console.error('Error fetching form stats:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Failed to fetch form stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Server error'
+    });
+  }
+};
+
+// Get forms by employee number
+exports.getFormsByEmployeeNumber = async (req, res) => {
+  try {
+    const { employeeNumber } = req.params;
+    
+    if (!employeeNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Employee number is required'
+      });
+    }
+    
+    // Find all forms that have this employee number
+    const forms = await Form.find({ 
+      employee_number: employeeNumber,
+      isActive: true 
+    })
+    .select('_id slug college employee_number activation deactivation createdAt')
+    .sort({ createdAt: -1 });
+    
+    return res.status(200).json({
+      success: true,
+      forms,
+      count: forms.length
+    });
+  } catch (error) {
+    console.error('Error fetching forms by employee number:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching forms',
       error: error.message
     });
   }

@@ -17,37 +17,51 @@ const corsOptions = {
  */
 exports.sendOTP = async (req, res) => {
   try {
+    console.log('OTP Send Request Received:', req.body);
     const { mobile } = req.body;
 
     // Validate mobile number
-    if (!mobile || !/^\d{10}$/.test(mobile)) {
+    if (!mobile) {
+      console.warn('Send OTP: Mobile number is missing');
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format'
+        message: 'Mobile number is required'
+      });
+    }
+
+    if (!/^\d{10}$/.test(mobile)) {
+      console.warn(`Send OTP: Invalid mobile number format: ${mobile}`);
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid 10-digit mobile number'
       });
     }
 
     // Send OTP
+    console.log(`Sending OTP to: ${mobile}`);
     const otpResult = await sendOTP(mobile);
+    console.log('OTP Result:', { success: otpResult.success, message: otpResult.message });
 
     if (otpResult.success) {
       return res.status(200).json({
         success: true,
-        message: 'OTP sent successfully',
+        message: otpResult.message || 'OTP sent successfully',
         requestId: otpResult.requestId,
         otp: otpResult.otp
       });
     } else {
-      return res.status(500).json({
+      console.error('OTP Sending Failed:', otpResult.message);
+      return res.status(400).json({
         success: false,
         message: otpResult.message || 'Failed to send OTP'
       });
     }
   } catch (error) {
-    console.error('Send OTP Error:', error);
+    console.error('Send OTP Server Error:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error while sending OTP'
+      message: 'Internal server error while sending OTP. Please try again.',
+      errorDetail: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -60,7 +74,7 @@ exports.sendOTP = async (req, res) => {
  */
 exports.verifyOTP = async (req, res) => {
   try {
-    const { mobile, otp } = req.body;
+    const { mobile, otp, requestId } = req.body;
 
     // Validate inputs
     if (!mobile || !otp) {
@@ -71,8 +85,10 @@ exports.verifyOTP = async (req, res) => {
       });
     }
 
+    console.log(`OTP Controller - Verify OTP: Mobile=${mobile}, OTP=${otp}, RequestID=${requestId}`);
+
     // Verify OTP using service
-    const verificationResult = await verifyOTP(mobile, otp);
+    const verificationResult = await verifyOTP(mobile, otp, requestId);
     
     if (verificationResult.success) {
       return res.status(200).json({
@@ -83,7 +99,7 @@ exports.verifyOTP = async (req, res) => {
 
     return res.status(400).json({
       success: false,
-      message: 'Invalid or expired OTP'
+      message: verificationResult.message || 'Invalid or expired OTP'
     });
   } catch (error) {
     console.error('Verify OTP Error:', error);
